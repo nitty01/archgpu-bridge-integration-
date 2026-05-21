@@ -1,0 +1,25 @@
+models:
+  - id: mistral
+    gguf_path: /home/nitender-kumar/llm/models/mistral.gguf
+    openai_name: mistral.gguf
+    ollama_name: mistral
+    port: 8080
+    context_length: 8192
+    tags:
+      - general
+  - id: code
+    gguf_path: /home/nitender-kumar/llm/models/code.gguf
+    openai_name: code.gguf
+    ollama_name: code
+    port: 8081
+    context_length: 8192
+    tags:
+      - code
+  - id: finance
+    gguf_path: /home/nitender-kumar/llm/models/finance.gguf
+    openai_name: finance.gguf
+    ollama_name: finance
+    port: 8082
+    context_length: 8192
+    tags:
+      - finance

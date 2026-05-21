@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "archgpu-ollama-bridge"
+version = "0.1.0"
+description = "Local model bridge for llama.cpp backends with OpenAI and Ollama compatible APIs."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116.0",
+  "httpx>=0.28.1",
+  "pydantic-settings>=2.10.1",
+  "pyyaml>=6.0.2",
+  "uvicorn>=0.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.1",
+]
+
+[project.scripts]
+archgpu-bridge = "archgpu_ollama_bridge.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/archgpu_ollama_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: end-to-end tests that require a real Docker daemon and GGUF models on disk",
+]
+addopts = "-m 'not integration'"

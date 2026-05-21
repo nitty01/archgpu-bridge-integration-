@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+.env
+.env.*
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+
+# Local runtime state
+data/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pip artefacts
+.pkg/
+=*

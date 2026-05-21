@@ -1,0 +1,20 @@
+[Unit]
+Description=ARCHGPU OLLAMA Bridge (local llama.cpp orchestrator)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE
+Environment=ARCHGPU_BRIDGE_LOG_LEVEL=INFO
+Environment=ARCHGPU_BRIDGE_HOST=0.0.0.0
+Environment=ARCHGPU_BRIDGE_PORT=8000
+Environment=ARCHGPU_BRIDGE_REGISTRY_PATH=config/models.yaml
+Environment=ARCHGPU_BRIDGE_STATE_PATH=data/runtime-state.json
+ExecStart=/usr/bin/env python -m archgpu_ollama_bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

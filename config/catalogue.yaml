@@ -1,0 +1,121 @@
+# Optional curated catalogue of pullable models.
+#
+# Aliases declared here can be passed to POST /api/pull as the model name.
+# Free-form HF references in the form `<org>/<repo>:<filename.gguf>` also work
+# and do not require an entry here.
+models:
+  # Qwen
+  - alias: qwen2.5-3b
+    repo: bartowski/Qwen2.5-3B-Instruct-GGUF
+    filename: Qwen2.5-3B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 3B Instruct (Q4_K_M)
+    tags: [general, qwen]
+  - alias: qwen2.5-7b
+    repo: bartowski/Qwen2.5-7B-Instruct-GGUF
+    filename: Qwen2.5-7B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 7B Instruct (Q4_K_M)
+    tags: [general, qwen]
+  - alias: qwen2.5-coder-3b
+    repo: Qwen/Qwen2.5-Coder-3B-Instruct-GGUF
+    filename: qwen2.5-coder-3b-instruct-q4_k_m.gguf
+    context_length: 8192
+    display_name: Qwen2.5 Coder 3B Instruct (Q4_K_M)
+    tags: [code, qwen]
+  - alias: qwen2.5-coder-7b
+    repo: bartowski/Qwen2.5-Coder-7B-Instruct-GGUF
+    filename: Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 Coder 7B Instruct (Q4_K_M)
+    tags: [code, qwen]
+
+  # Llama
+  - alias: llama-3.2-3b
+    repo: bartowski/Llama-3.2-3B-Instruct-GGUF
+    filename: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Llama 3.2 3B Instruct (Q4_K_M)
+    tags: [general, llama]
+
+  # Mistral
+  - alias: mistral-7b-instruct-v0.3
+    repo: bartowski/Mistral-7B-Instruct-v0.3-GGUF
+    filename: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Mistral 7B Instruct v0.3 (Q4_K_M)
+    tags: [general, mistral]
+
+  # Gemma
+  - alias: gemma-2-2b-it
+    repo: bartowski/gemma-2-2b-it-GGUF
+    filename: gemma-2-2b-it-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Gemma 2 2B IT (Q4_K_M)
+    tags: [general, gemma]
+  - alias: gemma-2-9b-it
+    repo: bartowski/gemma-2-9b-it-GGUF
+    filename: gemma-2-9b-it-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Gemma 2 9B IT (Q4_K_M)
+    tags: [general, gemma]
+
+  # DeepSeek-R1 distills
+  - alias: deepseek-r1-qwen-7b
+    repo: bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
+    context_length: 8192
+    display_name: DeepSeek R1 Distill Qwen 7B (Q4_K_M)
+    tags: [reasoning, deepseek, qwen]
+  - alias: deepseek-r1-llama-8b
+    repo: bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF
+    filename: DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf
+    context_length: 8192
+    display_name: DeepSeek R1 Distill Llama 8B (Q4_K_M)
+    tags: [reasoning, deepseek, llama]
+
+  # Lightweight open models
+  - alias: phi-3.5-mini
+    repo: bartowski/Phi-3.5-mini-instruct-GGUF
+    filename: Phi-3.5-mini-instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Phi 3.5 Mini Instruct (Q4_K_M)
+    tags: [general, phi]
+  - alias: smollm2-1.7b
+    repo: bartowski/SmolLM2-1.7B-Instruct-GGUF
+    filename: SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: SmolLM2 1.7B Instruct (Q4_K_M)
+    tags: [general, small]
+
+  # High-end / experimental (>14B)
+  - alias: qwen2.5-14b
+    repo: bartowski/Qwen2.5-14B-Instruct-GGUF
+    filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 14B Instruct (Q4_K_M)
+    tags: [general, qwen, highend]
+  - alias: qwen2.5-32b
+    repo: bartowski/Qwen2.5-32B-Instruct-GGUF
+    filename: Qwen2.5-32B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 32B Instruct (Q4_K_M)
+    tags: [general, qwen, highend]
+  - alias: qwen2.5-coder-14b
+    repo: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
+    filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+    context_length: 8192
+    display_name: Qwen2.5 Coder 14B Instruct (Q4_K_M)
+    tags: [code, qwen, highend]
+  - alias: deepseek-r1-qwen-14b
+    repo: bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
+    context_length: 8192
+    display_name: DeepSeek R1 Distill Qwen 14B (Q4_K_M)
+    tags: [reasoning, deepseek, qwen, highend]
+  - alias: deepseek-r1-qwen-32b
+    repo: bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf
+    context_length: 8192
+    display_name: DeepSeek R1 Distill Qwen 32B (Q4_K_M)
+    tags: [reasoning, deepseek, qwen, highend]

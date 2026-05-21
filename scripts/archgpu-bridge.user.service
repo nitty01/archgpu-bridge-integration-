@@ -1,0 +1,21 @@
+[Unit]
+Description=ARCHGPU OLLAMA Bridge (user service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE
+Environment=ARCHGPU_BRIDGE_LOG_LEVEL=INFO
+Environment=ARCHGPU_BRIDGE_HOST=0.0.0.0
+Environment=ARCHGPU_BRIDGE_PORT=8000
+Environment=ARCHGPU_BRIDGE_REGISTRY_PATH=config/models.yaml
+Environment=ARCHGPU_BRIDGE_STATE_PATH=data/runtime-state.json
+Environment=ARCHGPU_BRIDGE_BACKEND_STARTUP_TIMEOUT_SECONDS=300
+Environment=PYTHONPATH=/home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE/.pkg:/home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE/src
+ExecStart=/usr/bin/python3 -m archgpu_ollama_bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

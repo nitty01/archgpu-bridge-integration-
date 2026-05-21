@@ -25,7 +25,7 @@ The user prefers:
 
 The earlier setup was completed in a different workspace and lives under:
 
-- `/home/nitender-kumar/llm`
+- `/path/to/llm`
 
 ### What is already working
 
@@ -95,7 +95,7 @@ This means:
 
 There is already a detailed usage guide here:
 
-- `/home/nitender-kumar/llm/LOCAL_LLM_SETUP_AND_USAGE.md`
+- `/path/to/llm/LOCAL_LLM_SETUP_AND_USAGE.md`
 
 That document includes:
 
@@ -203,7 +203,7 @@ Design and build an `ARCHGPU_OLLAMA_BRIDGE` application that:
 Unless the user changes direction, reasonable defaults are:
 
 - build the bridge in this current repo/folder
-- target the existing local models under `/home/nitender-kumar/llm/models`
+- target the existing local models under `/path/to/llm/models`
 - keep using `llama.cpp` containers as the execution backend
 - optimize for local reliability first, not distributed scale
 - support Open WebUI as an important client

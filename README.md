@@ -173,7 +173,7 @@ best-effort local deployment baseline, not a production SLA.
 If you want this project in your own GitHub repository:
 
 ```bash
-cd /home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE
+cd /path/to/ARCHGPU_OLLAMA_BRIDGE
 
 # initialize once (if .git is missing)
 git init

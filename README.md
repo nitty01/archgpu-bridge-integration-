@@ -21,6 +21,20 @@ unload of model containers.
     (NDJSON streaming for chat/generate/pull)
   - Health probe at `GET /health`
 
+## Reference WebUI Fork
+
+This repository contains the bridge and integration scripts, not the full
+custom Open WebUI source. The customized WebUI implementation is maintained in
+the separate fork:
+
+- [https://github.com/nitty01/open-webui](https://github.com/nitty01/open-webui)
+
+Bridge-specific WebUI customizations in that fork include:
+
+- admin `Model Explorer` tab with searchable catalogue metadata and actions
+- chat `Model Selector` enhancements for installed/downloadable model states
+- backend Ollama proxy updates for bridge catalogue and pull status endpoints
+
 ## Recent Enhancements (And Why)
 
 - **Runtime model discovery (not static-only)**: `/api/catalogue` can now include

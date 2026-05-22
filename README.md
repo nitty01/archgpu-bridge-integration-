@@ -21,6 +21,114 @@ unload of model containers.
     (NDJSON streaming for chat/generate/pull)
   - Health probe at `GET /health`
 
+## Recent Enhancements (And Why)
+
+- **Runtime model discovery (not static-only)**: `/api/catalogue` can now include
+  live-discovered compatible GGUF models from Hugging Face, so users are not
+  limited to the checked-in `config/catalogue.yaml`.
+- **Metadata for decision-making**: catalogue responses include freshness and
+  popularity signals where available (`knowledge_last_update`, downloads, likes,
+  publisher, pipeline tag) to help users choose better models.
+- **Quality filtering**: server-side filters (`trusted_only`, minimum
+  downloads/likes, strict quality mode) reduce noisy/low-signal model results in
+  UI.
+- **Runtime fit recommendations**: catalogue entries include estimated fit
+  guidance (`recommended`/`possible`/`not_recommended`) based on model size
+  hints, quantization, and detected host memory profile.
+- **Safer deletion behavior**: delete endpoint supports both `POST` and `DELETE`
+  semantics, and exposes `deletable` metadata so UI can avoid invalid delete
+  actions on static models.
+- **Stability improvements for cold starts**: backend startup timeout default was
+  increased to `300s`, reducing first-load failures for larger models.
+- **Portable defaults + easier setup**: model directory default now resolves from
+  user home (`~/llm/models`) and installer automation is provided for dependency
+  bootstrapping.
+
+## System Prerequisites
+
+Before running this project, ensure your system has:
+
+- Linux host (tested on Ubuntu 26.04; other distros may work)
+- Intel Arc GPU with working Intel GPU compute/runtime stack
+- Docker Engine with permission to run containers and access `/dev/dri`
+- Python 3.11+ and `pip` (or your preferred Python package manager)
+- `make`, `curl`, and `jq` available in shell
+- Network access to:
+  - pull container images (for Open WebUI / llama.cpp runtime)
+  - pull models from Hugging Face (if using `POST /api/pull`)
+
+Recommended checks:
+
+```bash
+python3 --version
+docker --version
+docker run --rm hello-world
+ls /dev/dri
+```
+
+## Installation (Automatic)
+
+For most users on Ubuntu/Debian-like systems, run:
+
+```bash
+make install-auto
+```
+
+This installer script:
+
+- checks required tools (`python3`, `pip3`, `docker`, `make`, `curl`, `jq`)
+- installs missing apt packages (when possible)
+- installs Python dependencies into `.pkg`
+- builds `local/llama.cpp:server-intel` (if missing)
+
+Optional installer flags:
+
+```bash
+./scripts/install-bridge.sh --help
+./scripts/install-bridge.sh --install-user-service
+./scripts/install-bridge.sh --llama-cpp-dir /path/to/llama.cpp
+./scripts/install-bridge.sh --skip-image-build
+```
+
+## Installation (Manual)
+
+If you prefer to manage dependencies yourself:
+
+1. Install system packages:
+   - Python 3.11+
+   - pip
+   - Docker Engine (and ensure your user can run `docker`)
+   - `make`, `curl`, `jq`
+2. Install Python deps:
+
+```bash
+mkdir -p .pkg
+python3 -m pip install --upgrade pip setuptools wheel
+python3 -m pip install --upgrade --target .pkg -e .
+```
+
+3. Build Intel server runtime image (if missing):
+
+```bash
+# from your llama.cpp checkout
+docker build -t local/llama.cpp:server-intel --target server -f .devops/intel.Dockerfile .
+```
+
+4. Start stack:
+
+```bash
+make stack
+```
+
+5. (Optional) install as user service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/archgpu-bridge.user.service ~/.config/systemd/user/archgpu-bridge.service
+systemctl --user daemon-reload
+systemctl --user enable --now archgpu-bridge.service
+```
+
 ## Quickstart
 
 Install dependencies (PEP 660 editable install or any package manager you

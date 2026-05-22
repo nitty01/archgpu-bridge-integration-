@@ -1,7 +1,7 @@
 PYTHONPATH := .pkg:src
 PY := PYTHONPATH=$(PYTHONPATH) python3
 
-.PHONY: help dev run test lint clean status verify stack stack-restart unified upgrade-webui stack-down integration
+.PHONY: help dev run test lint clean status verify stack stack-restart unified upgrade-webui stack-down integration install install-auto
 
 help:
 	@echo "Targets:"
@@ -13,6 +13,8 @@ help:
 	@echo "  make upgrade-webui - pull latest Open WebUI image and recreate container (keeps data)"
 	@echo "  make stack-down  - stop bridge (our pid) + Open WebUI container"
 	@echo "  make verify      - headless verify (status + optional VERIFY_CHAT=1)"
+	@echo "  make install     - check/install bridge dependencies (manual mode)"
+	@echo "  make install-auto - install missing apt packages + build runtime image"
 	@echo "  make test        - run the unit test suite"
 	@echo "  make integration - run the optional integration test"
 	@echo "  make status      - check bridge + Open WebUI health and wiring"
@@ -23,6 +25,12 @@ status:
 
 verify:
 	@bash scripts/verify-webui-bridge.sh
+
+install:
+	@bash scripts/install-bridge.sh
+
+install-auto:
+	@bash scripts/install-bridge.sh --auto-install-packages
 
 stack:
 	@bash scripts/stack.sh up

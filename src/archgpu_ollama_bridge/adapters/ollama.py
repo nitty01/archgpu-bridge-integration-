@@ -1,6 +1,10 @@
 from datetime import UTC, datetime
+import os
+import re
+import time
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
@@ -12,6 +16,7 @@ from ..streaming import sse_to_ollama_chat, sse_to_ollama_generate
 
 def build_ollama_router(services: AppServices) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["ollama"])
+    live_catalogue_cache: dict[str, Any] = {"fetched_at": 0.0, "models": []}
 
     def _model_payload(
         name: str,
@@ -54,6 +59,302 @@ def build_ollama_router(services: AppServices) -> APIRouter:
         if services.registry.has(derived):
             return derived
         return identifier
+
+    def _pick_preferred_gguf_filename(files: list[str]) -> str | None:
+        if not files:
+            return None
+        preferences = (
+            "Q4_K_M",
+            "q4_k_m",
+            "Q5_K_M",
+            "q5_k_m",
+            "Q6_K",
+            "q6_k",
+            "Q8_0",
+            "q8_0",
+        )
+        for pref in preferences:
+            for file_name in files:
+                if pref in file_name:
+                    return file_name
+        return files[0]
+
+    def _derive_live_capabilities(model_id: str, tags: list[str], context_length: int | None) -> list[str]:
+        haystack = f"{model_id} {' '.join(tags)}".lower()
+        caps: list[str] = []
+        if "coder" in haystack or "code" in haystack:
+            caps.append("coding")
+        if "reason" in haystack or "deepseek-r1" in haystack:
+            caps.append("reasoning")
+        if context_length is not None and context_length >= 16384:
+            caps.append("long-context")
+        if "vision" in haystack or "vl" in haystack:
+            caps.append("vision")
+        if not caps:
+            caps.append("chat")
+        return caps
+
+    def _trusted_publishers() -> set[str]:
+        # Used by quality filters in Model Explorer.
+        return {
+            "lmstudio-community",
+            "bartowski",
+            "unsloth",
+            "qwen",
+            "microsoft",
+            "mistralai",
+            "meta-llama",
+            "google",
+        }
+
+    def _extract_model_size_b(model_name: str) -> float | None:
+        # Best-effort parse: "...14B..." -> 14.0
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[bB]\b", model_name)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+    def _extract_quant_bits(filename: str) -> float:
+        name = filename.lower()
+        if "q2_" in name:
+            return 2.0
+        if "q3_" in name:
+            return 3.0
+        if "q4_" in name or "iq4" in name:
+            return 4.0
+        if "q5_" in name:
+            return 5.0
+        if "q6_" in name:
+            return 6.0
+        if "q8_" in name:
+            return 8.0
+        return 4.0
+
+    def _detect_system_profile() -> dict[str, Any]:
+        # Linux-centric best-effort system profile.
+        total_ram_gb = None
+        try:
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            phys_pages = os.sysconf("SC_PHYS_PAGES")
+            total_ram_gb = round((page_size * phys_pages) / (1024 ** 3), 1)
+        except Exception:
+            total_ram_gb = None
+
+        vram_candidates_gb: list[float] = []
+        drm_root = "/sys/class/drm"
+        try:
+            if os.path.isdir(drm_root):
+                for entry in os.listdir(drm_root):
+                    if not entry.startswith("card"):
+                        continue
+                    vram_file = os.path.join(drm_root, entry, "device", "mem_info_vram_total")
+                    if os.path.isfile(vram_file):
+                        try:
+                            raw = open(vram_file, "r", encoding="utf-8").read().strip()
+                            vram_bytes = int(raw)
+                            vram_candidates_gb.append(round(vram_bytes / (1024 ** 3), 1))
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+        detected_vram_gb = max(vram_candidates_gb) if vram_candidates_gb else None
+        hint = None
+        if services.settings is not None:
+            hint = os.getenv("ARCHGPU_BRIDGE_GPU_VRAM_GB_HINT")
+        if hint:
+            try:
+                detected_vram_gb = float(hint)
+            except ValueError:
+                pass
+
+        return {
+            "ram_gb": total_ram_gb,
+            "gpu_vram_gb": detected_vram_gb,
+        }
+
+    def _runtime_fit_for_model(
+        *,
+        model_name: str,
+        filename: str,
+        context_length: int | None,
+        system_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        params_b = _extract_model_size_b(model_name) or _extract_model_size_b(filename)
+        quant_bits = _extract_quant_bits(filename)
+        estimated_model_gb = None
+        if params_b is not None:
+            # Approx: params(B) * bits/8 + 25% overhead.
+            estimated_model_gb = round(params_b * (quant_bits / 8.0) * 1.25, 1)
+
+        gpu_vram_gb = system_profile.get("gpu_vram_gb")
+        ram_gb = system_profile.get("ram_gb")
+        recommendation = "unknown"
+        fits_gpu = None
+        fits_ram = None
+        reason = "insufficient metadata"
+
+        if estimated_model_gb is not None:
+            if gpu_vram_gb is not None:
+                fits_gpu = estimated_model_gb <= gpu_vram_gb * 0.9
+            if ram_gb is not None:
+                fits_ram = estimated_model_gb <= ram_gb * 0.6
+
+            if fits_gpu is True:
+                recommendation = "recommended"
+                reason = "estimated to fit GPU VRAM"
+            elif fits_gpu is False and fits_ram is True:
+                recommendation = "possible"
+                reason = "likely RAM/offload fallback, slower performance"
+            elif fits_gpu is False and fits_ram is False:
+                recommendation = "not_recommended"
+                reason = "estimated memory footprint too large"
+            else:
+                recommendation = "possible"
+                reason = "partial system information available"
+
+        if context_length is not None and context_length > 65536 and recommendation == "possible":
+            reason = f"{reason}; high context may reduce throughput"
+
+        return {
+            "estimated_model_gb": estimated_model_gb,
+            "estimated_param_b": params_b,
+            "quant_bits": quant_bits,
+            "fits_gpu": fits_gpu,
+            "fits_ram": fits_ram,
+            "recommendation": recommendation,
+            "reason": reason,
+        }
+
+    async def _discover_live_catalogue(
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict[str, Any]]:
+        settings = services.settings
+        if settings is None or not settings.hf_discovery_enabled:
+            return []
+
+        now = time.time()
+        ttl = max(0, settings.hf_discovery_ttl_seconds)
+        cached_models = live_catalogue_cache.get("models", [])
+        cached_at = float(live_catalogue_cache.get("fetched_at", 0.0))
+        if (
+            not force_refresh
+            and cached_models
+            and ttl > 0
+            and (now - cached_at) < ttl
+        ):
+            return list(cached_models)
+
+        base_url = settings.hf_base_url.rstrip("/")
+        owners = {owner.lower() for owner in settings.hf_discovery_owners}
+        per_query_limit = max(1, settings.hf_discovery_per_query_limit)
+        max_models = max(1, settings.hf_discovery_max_models)
+
+        discovered_ids: list[str] = []
+        seen_ids: set[str] = set()
+        timeout = httpx.Timeout(20.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for query in settings.hf_discovery_queries:
+                response = await client.get(
+                    f"{base_url}/api/models",
+                    params={
+                        "search": query,
+                        "limit": per_query_limit,
+                        "sort": "lastModified",
+                        "direction": -1,
+                    },
+                )
+                response.raise_for_status()
+                items = response.json()
+                for item in items:
+                    model_id = item.get("id")
+                    if not model_id or model_id in seen_ids:
+                        continue
+                    owner = model_id.split("/", 1)[0].lower() if "/" in model_id else ""
+                    if owners and owner not in owners:
+                        continue
+                    seen_ids.add(model_id)
+                    discovered_ids.append(model_id)
+                    if len(discovered_ids) >= max_models:
+                        break
+                if len(discovered_ids) >= max_models:
+                    break
+
+            results: list[dict[str, Any]] = []
+            for model_id in discovered_ids:
+                details_response = await client.get(f"{base_url}/api/models/{model_id}")
+                if details_response.status_code != 200:
+                    continue
+                details = details_response.json()
+                siblings = details.get("siblings", [])
+                gguf_files = [
+                    f.get("rfilename", "")
+                    for f in siblings
+                    if f.get("rfilename", "").lower().endswith(".gguf")
+                ]
+                filename = _pick_preferred_gguf_filename([f for f in gguf_files if f])
+                if filename is None:
+                    continue
+
+                hf_tags = details.get("tags", [])
+                context_length = None
+                for tag in hf_tags:
+                    match = re.match(r"ctx:(\d+)", str(tag), re.IGNORECASE)
+                    if match:
+                        context_length = int(match.group(1))
+                        break
+
+                pull_name = f"{model_id}:{filename}"
+                installed_as: str | None = None
+                if services.registry.has(pull_name):
+                    installed_as = pull_name
+                elif services.catalogue is not None:
+                    try:
+                        derived = derive_model_id(services.catalogue.resolve(pull_name))
+                        if services.registry.has(derived):
+                            installed_as = derived
+                    except Exception:
+                        installed_as = None
+
+                caps = _derive_live_capabilities(model_id, [str(t) for t in hf_tags], context_length)
+                results.append(
+                    {
+                        "alias": pull_name,
+                        "pull_name": pull_name,
+                        "display_name": model_id.split("/", 1)[-1],
+                        "repo": model_id,
+                        "filename": filename,
+                        "context_length": context_length,
+                        "tags": ["live", "auto"] + [str(t) for t in hf_tags[:8]],
+                        "capabilities": caps,
+                        "installed": installed_as is not None,
+                        "installed_as": installed_as,
+                        "deletable": bool(installed_as and services.registry.is_dynamic(installed_as)),
+                        "downloadable": installed_as is None,
+                        "pull_status": None,
+                        "metadata": {
+                            "source": "live_discovery",
+                            "publisher": model_id.split("/", 1)[0] if "/" in model_id else None,
+                            "last_modified": details.get("lastModified"),
+                            "knowledge_last_update": details.get("lastModified"),
+                            "downloads": details.get("downloads"),
+                            "likes": details.get("likes"),
+                            "pipeline_tag": details.get("pipeline_tag"),
+                            "gated": bool(details.get("gated")),
+                            "private": bool(details.get("private")),
+                            "library_name": details.get("library_name"),
+                        },
+                    }
+                )
+
+        live_catalogue_cache["fetched_at"] = now
+        live_catalogue_cache["models"] = results
+        return list(results)
 
     @router.get("/tags")
     async def list_tags() -> dict[str, Any]:
@@ -186,7 +487,22 @@ def build_ollama_router(services: AppServices) -> APIRouter:
         return {"models": [item.to_dict() for item in services.pull_manager.list_status()]}
 
     @router.get("/catalogue")
-    async def catalogue() -> dict[str, Any]:
+    async def catalogue(request: Request) -> dict[str, Any]:
+        def _to_int(value: str | None, default: int = 0) -> int:
+            try:
+                return int(value) if value is not None else default
+            except (TypeError, ValueError):
+                return default
+
+        query = (request.query_params.get("q") or "").strip().lower()
+        include_live = request.query_params.get("live", "true").lower() != "false"
+        force_refresh = request.query_params.get("refresh", "false").lower() == "true"
+        trusted_only = request.query_params.get("trusted_only", "false").lower() == "true"
+        min_downloads = _to_int(request.query_params.get("min_downloads"), 0)
+        min_likes = _to_int(request.query_params.get("min_likes"), 0)
+        quality_mode = request.query_params.get("quality", "off").strip().lower()
+        system_profile = _detect_system_profile()
+
         entries = list(_catalogue_lookup().values())
         status_map: dict[str, dict[str, Any]] = {}
         if services.pull_manager is not None:
@@ -212,22 +528,118 @@ def build_ollama_router(services: AppServices) -> APIRouter:
             if pull_state is None and installed_as is not None:
                 pull_state = status_map.get(installed_as)
 
+            deletable = False
+            if installed_as is not None:
+                try:
+                    deletable = services.registry.is_dynamic(installed_as)
+                except Exception:
+                    deletable = False
+
             models.append(
                 {
                     "alias": entry.alias,
+                    "pull_name": entry.alias,
                     "display_name": entry.display_name or entry.alias,
                     "repo": entry.repo,
                     "filename": entry.filename,
                     "context_length": entry.context_length,
                     "tags": entry.tags,
+                    "capabilities": _derive_live_capabilities(entry.alias, list(entry.tags), entry.context_length),
                     "installed": installed_as is not None,
                     "installed_as": installed_as,
+                    "deletable": deletable,
                     "downloadable": installed_as is None,
                     "pull_status": pull_state,
+                    "metadata": {
+                        "source": "static_catalogue",
+                        "publisher": entry.repo.split("/", 1)[0] if "/" in entry.repo else None,
+                        "knowledge_last_update": None,
+                        "last_modified": None,
+                        "downloads": None,
+                        "likes": None,
+                        "pipeline_tag": None,
+                    },
                 }
             )
 
-        return {"models": models}
+        if include_live:
+            try:
+                live_models = await _discover_live_catalogue(force_refresh=force_refresh)
+            except Exception:
+                live_models = []
+            for lm in live_models:
+                alias = lm.get("alias")
+                if any(m.get("alias") == alias for m in models):
+                    continue
+                pull_state = status_map.get(alias)
+                if pull_state is None and lm.get("installed_as"):
+                    pull_state = status_map.get(lm["installed_as"])
+                lm["pull_status"] = pull_state or lm.get("pull_status")
+                models.append(lm)
+
+        for model in models:
+            model["runtime_fit"] = _runtime_fit_for_model(
+                model_name=str(model.get("display_name") or model.get("alias") or ""),
+                filename=str(model.get("filename") or ""),
+                context_length=model.get("context_length"),
+                system_profile=system_profile,
+            )
+
+        trusted_publishers = _trusted_publishers()
+        if trusted_only:
+            models = [
+                model
+                for model in models
+                if str((model.get("metadata") or {}).get("publisher", "")).lower()
+                in trusted_publishers
+            ]
+
+        if min_downloads > 0:
+            models = [
+                model
+                for model in models
+                if int((model.get("metadata") or {}).get("downloads") or 0) >= min_downloads
+            ]
+
+        if min_likes > 0:
+            models = [
+                model
+                for model in models
+                if int((model.get("metadata") or {}).get("likes") or 0) >= min_likes
+            ]
+
+        if quality_mode == "strict":
+            models = [
+                model
+                for model in models
+                if (
+                    str((model.get("metadata") or {}).get("publisher", "")).lower() in trusted_publishers
+                    and int((model.get("metadata") or {}).get("downloads") or 0) >= 1000
+                    and int((model.get("metadata") or {}).get("likes") or 0) >= 10
+                )
+            ]
+
+        if query:
+            models = [
+                model
+                for model in models
+                if query
+                in " ".join(
+                    [
+                        str(model.get("alias", "")),
+                        str(model.get("display_name", "")),
+                        str(model.get("repo", "")),
+                        str(model.get("filename", "")),
+                        " ".join(str(t) for t in model.get("tags", [])),
+                        " ".join(str(c) for c in model.get("capabilities", [])),
+                        str((model.get("metadata") or {}).get("publisher", "")),
+                        str((model.get("runtime_fit") or {}).get("recommendation", "")),
+                        str((model.get("runtime_fit") or {}).get("reason", "")),
+                    ]
+                ).lower()
+            ]
+
+        return {"models": models, "system_profile": system_profile}
 
     @router.get("/catalogue/ui")
     async def catalogue_ui() -> HTMLResponse:
@@ -373,6 +785,7 @@ loadModels();
         )
 
     @router.post("/delete")
+    @router.delete("/delete")
     async def delete(request: Request) -> JSONResponse:
         payload = await request.json()
         name = payload.get("name") or payload.get("model")

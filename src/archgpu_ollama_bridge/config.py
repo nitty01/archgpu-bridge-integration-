@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     backend_driver: str = Field(default="docker")
     backend_image: str = Field(default="local/llama.cpp:server-intel")
     backend_container_prefix: str = Field(default="archgpu-bridge-")
-    backend_models_host_dir: Path = Field(default=Path("/home/nitender-kumar/llm/models"))
+    backend_models_host_dir: Path = Field(
+        default_factory=lambda: (Path.home() / "llm" / "models")
+    )
     backend_models_container_dir: str = Field(default="/models")
     backend_devices: list[str] = Field(
         default_factory=lambda: ["/dev/dri/renderD128", "/dev/dri/card1"]
@@ -30,7 +32,7 @@ class Settings(BaseSettings):
     backend_extra_args: list[str] = Field(
         default_factory=lambda: ["-ngl", "999", "--cache-ram", "0", "-np", "1"]
     )
-    backend_startup_timeout_seconds: float = Field(default=90.0)
+    backend_startup_timeout_seconds: float = Field(default=300.0)
     backend_health_path: str = Field(default="/health")
     backend_docker_binary: str = Field(default="docker")
 
@@ -43,6 +45,21 @@ class Settings(BaseSettings):
     dynamic_default_context_length: int = Field(default=8192, gt=0)
     hf_base_url: str = Field(default="https://huggingface.co")
     hf_allow_orgs: list[str] = Field(default_factory=list)
+    hf_discovery_enabled: bool = Field(default=True)
+    hf_discovery_ttl_seconds: int = Field(default=1800, ge=0)
+    hf_discovery_per_query_limit: int = Field(default=12, ge=1, le=100)
+    hf_discovery_max_models: int = Field(default=80, ge=1, le=500)
+    hf_discovery_queries: list[str] = Field(
+        default_factory=lambda: [
+            "Qwen3 GGUF",
+            "Qwen2.5 Instruct GGUF",
+            "DeepSeek-R1 Distill GGUF",
+            "Mistral Small Instruct GGUF",
+            "Phi-4 GGUF",
+            "Llama Instruct GGUF",
+        ]
+    )
+    hf_discovery_owners: list[str] = Field(default_factory=list)
     pull_max_bytes: int | None = Field(default=None)
     pull_request_timeout_seconds: float = Field(default=3600.0)
 

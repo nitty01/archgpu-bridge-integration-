@@ -89,6 +89,12 @@ models:
     tags: [general, small]
 
   # High-end / experimental (>14B)
+  - alias: qwen3-14b
+    repo: lmstudio-community/Qwen3-14B-GGUF
+    filename: Qwen3-14B-Q4_K_M.gguf
+    context_length: 32768
+    display_name: Qwen3 14B Instruct (Q4_K_M)
+    tags: [general, qwen, highend, latest]
   - alias: qwen2.5-14b
     repo: bartowski/Qwen2.5-14B-Instruct-GGUF
     filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
@@ -113,9 +119,33 @@ models:
     context_length: 8192
     display_name: DeepSeek R1 Distill Qwen 14B (Q4_K_M)
     tags: [reasoning, deepseek, qwen, highend]
+  - alias: deepseek-r1-qwen-14b-latest
+    repo: lmstudio-community/DeepSeek-R1-Distill-Qwen-14B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
+    context_length: 32768
+    display_name: DeepSeek R1 Distill Qwen 14B (Q4_K_M, latest repo)
+    tags: [reasoning, deepseek, qwen, highend, latest]
   - alias: deepseek-r1-qwen-32b
     repo: bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF
     filename: DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf
     context_length: 8192
     display_name: DeepSeek R1 Distill Qwen 32B (Q4_K_M)
     tags: [reasoning, deepseek, qwen, highend]
+  - alias: mistral-small-3.2-24b
+    repo: lmstudio-community/Mistral-Small-3.2-24B-Instruct-2506-GGUF
+    filename: Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf
+    context_length: 32768
+    display_name: Mistral Small 3.2 24B Instruct (Q4_K_M)
+    tags: [general, mistral, highend, latest]
+  - alias: phi-4-mini
+    repo: lmstudio-community/Phi-4-mini-instruct-GGUF
+    filename: Phi-4-mini-instruct-Q4_K_M.gguf
+    context_length: 16384
+    display_name: Phi-4 Mini Instruct (Q4_K_M)
+    tags: [general, phi, latest]
+  - alias: phi-4-reasoning-plus
+    repo: lmstudio-community/Phi-4-reasoning-plus-GGUF
+    filename: Phi-4-reasoning-plus-Q4_K_M.gguf
+    context_length: 16384
+    display_name: Phi-4 Reasoning Plus (Q4_K_M)
+    tags: [reasoning, phi, latest]

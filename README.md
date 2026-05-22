@@ -90,6 +90,48 @@ Optional installer flags:
 ./scripts/install-bridge.sh --skip-image-build
 ```
 
+### Install As System Service (Recommended for persistent host setup)
+
+To install the bridge outside your repo checkout and run it at boot:
+
+```bash
+make install-system
+# or:
+# ./scripts/install-system-service.sh
+```
+
+Custom port example:
+
+```bash
+make install-system PORT=8010
+# or:
+# ./scripts/install-system-service.sh --port 8010
+```
+
+This installs:
+
+- code under `/opt/archgpu-ollama-bridge`
+- models and runtime state under `/var/lib/archgpu-ollama-bridge`
+- systemd unit at `/etc/systemd/system/archgpu-bridge.service`
+- env config at `/etc/default/archgpu-bridge`
+
+After install, the service is enabled immediately and on startup:
+
+```bash
+sudo systemctl status archgpu-bridge.service
+sudo systemctl enable archgpu-bridge.service
+```
+
+Uninstall system service:
+
+```bash
+make uninstall-system
+# keep models/state by default
+
+make uninstall-system PURGE_DATA=1
+# removes /var/lib/archgpu-ollama-bridge too
+```
+
 ## Installation (Manual)
 
 If you prefer to manage dependencies yourself:
@@ -127,6 +169,18 @@ mkdir -p ~/.config/systemd/user
 cp scripts/archgpu-bridge.user.service ~/.config/systemd/user/archgpu-bridge.service
 systemctl --user daemon-reload
 systemctl --user enable --now archgpu-bridge.service
+```
+
+6. (Alternative) install as system service:
+
+```bash
+sudo ./scripts/install-system-service.sh
+```
+
+With custom port:
+
+```bash
+sudo ./scripts/install-system-service.sh --port 8010
 ```
 
 ## Quickstart

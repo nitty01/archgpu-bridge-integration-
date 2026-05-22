@@ -577,6 +577,47 @@ def build_ollama_router(services: AppServices) -> APIRouter:
                 lm["pull_status"] = pull_state or lm.get("pull_status")
                 models.append(lm)
 
+        # Always include installed registry models even if they are not part of
+        # curated catalogue aliases or live-discovered candidates.
+        known_installed = {
+            str(item.get("installed_as"))
+            for item in models
+            if item.get("installed_as") is not None
+        }
+        known_aliases = {str(item.get("alias")) for item in models}
+        for reg_model in services.registry.list_models():
+            if reg_model.id in known_installed or reg_model.ollama_name in known_aliases:
+                continue
+            pull_state = status_map.get(reg_model.ollama_name) or status_map.get(reg_model.id)
+            models.append(
+                {
+                    "alias": reg_model.ollama_name,
+                    "pull_name": reg_model.ollama_name,
+                    "display_name": reg_model.openai_name or reg_model.ollama_name,
+                    "repo": None,
+                    "filename": reg_model.gguf_path.name,
+                    "context_length": reg_model.context_length,
+                    "tags": reg_model.tags,
+                    "capabilities": _derive_live_capabilities(
+                        reg_model.ollama_name, list(reg_model.tags), reg_model.context_length
+                    ),
+                    "installed": True,
+                    "installed_as": reg_model.id,
+                    "deletable": services.registry.is_dynamic(reg_model.id),
+                    "downloadable": False,
+                    "pull_status": pull_state,
+                    "metadata": {
+                        "source": "local_registry",
+                        "publisher": None,
+                        "knowledge_last_update": None,
+                        "last_modified": None,
+                        "downloads": None,
+                        "likes": None,
+                        "pipeline_tag": None,
+                    },
+                }
+            )
+
         for model in models:
             model["runtime_fit"] = _runtime_fit_for_model(
                 model_name=str(model.get("display_name") or model.get("alias") or ""),

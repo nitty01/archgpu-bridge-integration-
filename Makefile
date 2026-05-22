@@ -1,7 +1,7 @@
 PYTHONPATH := .pkg:src
 PY := PYTHONPATH=$(PYTHONPATH) python3
 
-.PHONY: help dev run test lint clean status verify stack stack-restart unified upgrade-webui stack-down integration install install-auto
+.PHONY: help dev run test lint clean status verify stack stack-restart unified upgrade-webui stack-down integration install install-auto install-system uninstall-system
 
 help:
 	@echo "Targets:"
@@ -15,6 +15,8 @@ help:
 	@echo "  make verify      - headless verify (status + optional VERIFY_CHAT=1)"
 	@echo "  make install     - check/install bridge dependencies (manual mode)"
 	@echo "  make install-auto - install missing apt packages + build runtime image"
+	@echo "  make install-system - install bridge as system service under /opt + /var/lib (PORT=<port> optional)"
+	@echo "  make uninstall-system - remove system bridge service (PURGE_DATA=1 optional)"
 	@echo "  make test        - run the unit test suite"
 	@echo "  make integration - run the optional integration test"
 	@echo "  make status      - check bridge + Open WebUI health and wiring"
@@ -31,6 +33,12 @@ install:
 
 install-auto:
 	@bash scripts/install-bridge.sh --auto-install-packages
+
+install-system:
+	@bash scripts/install-system-service.sh $(if $(PORT),--port $(PORT),)
+
+uninstall-system:
+	@bash scripts/uninstall-system-service.sh $(if $(PURGE_DATA),--purge-data,)
 
 stack:
 	@bash scripts/stack.sh up

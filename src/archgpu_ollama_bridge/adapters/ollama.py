@@ -133,6 +133,23 @@ def build_ollama_router(services: AppServices) -> APIRouter:
             return 8.0
         return 4.0
 
+    def _display_name_from_registry_model(model) -> str:
+        if getattr(model, "display_name", None):
+            return str(model.display_name)
+
+        repo = getattr(model, "hf_repo", None)
+        filename = getattr(model, "hf_filename", None) or model.gguf_path.name
+        if repo:
+            base = repo.split("/", 1)[-1]
+        else:
+            base = model.ollama_name
+
+        quant_match = re.search(r"(q\d(?:_[a-z0-9]+)+)", str(filename), re.IGNORECASE)
+        quant = quant_match.group(1).upper() if quant_match else None
+        if quant and quant.lower() not in base.lower():
+            return f"{base} ({quant})"
+        return base
+
     def _detect_system_profile() -> dict[str, Any]:
         # Linux-centric best-effort system profile.
         total_ram_gb = None
@@ -482,9 +499,43 @@ def build_ollama_router(services: AppServices) -> APIRouter:
             return {"models": []}
         model = request.query_params.get("model")
         if model:
-            status = services.pull_manager.get_status(model)
+            status = services.pull_manager.get_status(_resolve_runtime_identifier(model))
             return {"models": [status.to_dict()] if status else []}
         return {"models": [item.to_dict() for item in services.pull_manager.list_status()]}
+
+    @router.post("/pull/control")
+    async def pull_control(request: Request) -> dict[str, Any]:
+        if services.pull_manager is None:
+            raise HTTPException(status_code=503, detail="pull manager is not configured")
+        payload = await request.json()
+        model = (payload.get("model") or payload.get("name") or "").strip()
+        action = (payload.get("action") or "").strip().lower()
+        if not model:
+            raise HTTPException(status_code=422, detail="Request body must include 'model' or 'name'")
+        if not action:
+            raise HTTPException(status_code=422, detail="Request body must include 'action'")
+
+        target = _resolve_runtime_identifier(model)
+        if action in {"stop", "pause"}:
+            status = await services.pull_manager.stop(target)
+            return {"status": "ok", "model": target, "result": status.to_dict()}
+        if action == "resume":
+            status = await services.pull_manager.resume(target)
+            return {"status": "ok", "model": target, "result": status.to_dict()}
+        if action == "restart":
+            status = await services.pull_manager.restart(target)
+            return {"status": "ok", "model": target, "result": status.to_dict()}
+        if action in {"purge", "delete"}:
+            status = await services.pull_manager.purge(target)
+            return {"status": "ok", "model": target, "result": status.to_dict()}
+        if action == "clear":
+            services.pull_manager.clear(target)
+            return {"status": "ok", "model": target, "result": None}
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported action {action!r}. Supported: stop,pause,resume,restart,purge,delete,clear",
+        )
 
     @router.get("/catalogue")
     async def catalogue(request: Request) -> dict[str, Any]:
@@ -593,9 +644,9 @@ def build_ollama_router(services: AppServices) -> APIRouter:
                 {
                     "alias": reg_model.ollama_name,
                     "pull_name": reg_model.ollama_name,
-                    "display_name": reg_model.openai_name or reg_model.ollama_name,
-                    "repo": None,
-                    "filename": reg_model.gguf_path.name,
+                    "display_name": _display_name_from_registry_model(reg_model),
+                    "repo": reg_model.hf_repo,
+                    "filename": reg_model.hf_filename or reg_model.gguf_path.name,
                     "context_length": reg_model.context_length,
                     "tags": reg_model.tags,
                     "capabilities": _derive_live_capabilities(

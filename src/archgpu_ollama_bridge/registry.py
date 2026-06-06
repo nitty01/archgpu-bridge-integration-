@@ -12,6 +12,7 @@ class ModelRecord(BaseModel):
     gguf_path: Path
     openai_name: str
     ollama_name: str
+    display_name: str | None = None
     port: int = Field(gt=0)
     context_length: int = Field(default=8192, gt=0)
     tags: list[str] = Field(default_factory=list)

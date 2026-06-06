@@ -78,18 +78,28 @@ class HuggingFaceDownloader:
     def target_path(self, ref: HFRef) -> Path:
         return self._models_dir / ref.safe_local_filename
 
+    def partial_path(self, ref: HFRef) -> Path:
+        target = self.target_path(ref)
+        return target.with_suffix(target.suffix + ".partial")
+
     def already_present(self, ref: HFRef) -> Path | None:
         target = self.target_path(ref)
         if target.exists() and target.stat().st_size > 0:
             return target
         return None
 
-    async def pull(self, ref: HFRef) -> AsyncIterator[bytes]:
+    async def pull(
+        self,
+        ref: HFRef,
+        *,
+        keep_partial_on_cancel: bool = False,
+        resume: bool = True,
+    ) -> AsyncIterator[bytes]:
         """Yield Ollama-shaped NDJSON progress events for a single pull."""
 
         url = f"{self._base_url}/{ref.repo}/resolve/{ref.revision}/{ref.filename}"
         target = self.target_path(ref)
-        partial = target.with_suffix(target.suffix + ".partial")
+        partial = self.partial_path(ref)
 
         self._models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -106,18 +116,20 @@ class HuggingFaceDownloader:
             )
             return
 
-        if partial.exists():
-            try:
-                partial.unlink()
-            except OSError:
-                pass
-
         try:
             async with self._client_factory() as client:
-                async for event in self._stream_to_disk(client, url, ref, target, partial):
+                async for event in self._stream_to_disk(
+                    client,
+                    url,
+                    ref,
+                    target,
+                    partial,
+                    resume=resume,
+                ):
                     yield event
         except asyncio.CancelledError:
-            self._cleanup(partial)
+            if not keep_partial_on_cancel:
+                self._cleanup(partial)
             raise
         except Exception as exc:
             self._cleanup(partial)
@@ -132,8 +144,15 @@ class HuggingFaceDownloader:
         ref: HFRef,
         target: Path,
         partial: Path,
+        *,
+        resume: bool = True,
     ) -> AsyncIterator[bytes]:
-        async with client.stream("GET", url, params={"download": "true"}) as response:
+        partial_size = partial.stat().st_size if (resume and partial.exists()) else 0
+        headers: dict[str, str] = {}
+        if partial_size > 0:
+            headers["Range"] = f"bytes={partial_size}-"
+
+        async with client.stream("GET", url, params={"download": "true"}, headers=headers) as response:
             if response.status_code >= 400:
                 detail = (await response.aread()).decode("utf-8", errors="replace")[:500]
                 raise DownloadError(
@@ -142,7 +161,23 @@ class HuggingFaceDownloader:
 
             content_length = response.headers.get("content-length")
             etag = response.headers.get("x-linked-etag") or response.headers.get("etag")
-            total = int(content_length) if content_length and content_length.isdigit() else 0
+            remaining = int(content_length) if content_length and content_length.isdigit() else 0
+            total = remaining
+            mode = "wb"
+            completed = 0
+            if partial_size > 0 and response.status_code == 206:
+                total = partial_size + remaining
+                completed = partial_size
+                mode = "ab"
+            elif partial_size > 0 and response.status_code == 200:
+                # Upstream ignored Range; restart from zero.
+                try:
+                    partial.unlink()
+                except OSError:
+                    pass
+                partial_size = 0
+                completed = 0
+                mode = "wb"
 
             if self._max_bytes is not None and total and total > self._max_bytes:
                 raise DownloadError(
@@ -158,17 +193,16 @@ class HuggingFaceDownloader:
                 {
                     "status": "downloading",
                     "digest": digest_str,
-                    "total": total,
-                    "completed": 0,
+                    "total": total or completed,
+                    "completed": completed,
                 }
             )
 
-            completed = 0
             sha = hashlib.sha256()
             last_emit = 0.0
-            last_bytes = 0
+            last_bytes = completed
 
-            with partial.open("wb") as fh:
+            with partial.open(mode) as fh:
                 async for chunk in response.aiter_bytes(chunk_size=self._chunk_size):
                     if not chunk:
                         continue

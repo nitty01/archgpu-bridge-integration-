@@ -1,7 +1,7 @@
 [Unit]
 Description=ARCHGPU OLLAMA Bridge (user service)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
@@ -11,10 +11,15 @@ Environment=ARCHGPU_BRIDGE_HOST=0.0.0.0
 Environment=ARCHGPU_BRIDGE_PORT=8000
 Environment=ARCHGPU_BRIDGE_REGISTRY_PATH=config/models.yaml
 Environment=ARCHGPU_BRIDGE_STATE_PATH=data/runtime-state.json
+Environment=ARCHGPU_BRIDGE_DYNAMIC_MODELS_PATH=data/downloaded_models.yaml
+Environment=ARCHGPU_BRIDGE_BACKEND_MODELS_HOST_DIR=%h/llm/models
 Environment=ARCHGPU_BRIDGE_BACKEND_STARTUP_TIMEOUT_SECONDS=300
-Environment=PYTHONPATH=/home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE/.pkg:/home/nitender-kumar/PROJECTS/PERSONAL/GIT/ARCHGPU_OLLAMA_BRIDGE/src
+Environment=ARCHGPU_BRIDGE_HF_INDEX_MODE=live_page
+Environment=ARCHGPU_BRIDGE_HF_DISCOVERY_ENABLED=true
+Environment=PYTHONPATH=.pkg:src
+EnvironmentFile=-%h/.config/archgpu-bridge/environment
 ExecStart=/usr/bin/python3 -m archgpu_ollama_bridge
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

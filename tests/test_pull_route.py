@@ -48,7 +48,13 @@ class FakeDownloader:
     def already_present(self, ref: HFRef) -> Path | None:
         return None
 
-    async def pull(self, ref: HFRef) -> AsyncIterator[bytes]:
+    async def pull(
+        self,
+        ref: HFRef,
+        *,
+        keep_partial_on_cancel: bool = True,
+        resume: bool = True,
+    ) -> AsyncIterator[bytes]:
         # Simulate creating the file then emitting events
         path = self.target_path(ref)
         path.parent.mkdir(parents=True, exist_ok=True)

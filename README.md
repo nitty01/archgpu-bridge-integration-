@@ -37,9 +37,14 @@ Bridge-specific WebUI customizations in that fork include:
 
 ## Recent Enhancements (And Why)
 
-- **Runtime model discovery (not static-only)**: `/api/catalogue` can now include
-  live-discovered compatible GGUF models from Hugging Face, so users are not
-  limited to the checked-in `config/catalogue.yaml`.
+- **Full-capacity HF GGUF index**: `/api/catalogue?live=true` crawls public
+  Hugging Face models with GGUF files via cursor pagination (not query-limited
+  discovery). Results are cached in memory and optionally on disk.
+- **Paginated catalogue API**: `/api/catalogue` supports server-driven pagination,
+  search, sorting, and field filters. Existing callers without `page`/`page_size`
+  still receive the full list plus envelope metadata.
+- **Runtime model discovery (not static-only)**: `/api/catalogue` merges static
+  catalogue entries, HF index results, and locally installed models.
 - **Metadata for decision-making**: catalogue responses include freshness and
   popularity signals where available (`knowledge_last_update`, downloads, likes,
   publisher, pipeline tag) to help users choose better models.
@@ -305,11 +310,62 @@ ones:
 - `ARCHGPU_BRIDGE_DYNAMIC_MODELS_PATH` (state file for pulled models)
 - `ARCHGPU_BRIDGE_DYNAMIC_PORT_RANGE` (e.g. `[18000, 18099]`)
 - `ARCHGPU_BRIDGE_HF_BASE_URL`
+- `ARCHGPU_BRIDGE_HF_TOKEN` (**required** for reliable live HF catalogue; avoids IP rate limits)
 - `ARCHGPU_BRIDGE_HF_ALLOW_ORGS` (allowlist; empty = any org)
+- `ARCHGPU_BRIDGE_HF_INDEX_MAX_MODELS` (default `5000`)
+- `ARCHGPU_BRIDGE_HF_INDEX_MAX_PAGES` (HF crawl page cap, default `200`)
+- `ARCHGPU_BRIDGE_HF_INDEX_PAGE_SIZE` (HF API page size, default `500`)
+- `ARCHGPU_BRIDGE_HF_INDEX_TTL_SECONDS` (index cache TTL, default `3600`)
+- `ARCHGPU_BRIDGE_HF_INDEX_CACHE_PATH` (disk cache, default `data/hf_gguf_index.json`)
+- `ARCHGPU_BRIDGE_CATALOGUE_DEFAULT_PAGE_SIZE` (UI/API default page size, default `25`)
 - `ARCHGPU_BRIDGE_PULL_MAX_BYTES` (optional safety cap)
 
 See [src/archgpu_ollama_bridge/config.py](src/archgpu_ollama_bridge/config.py)
 for the full list.
+
+### Catalogue pagination and search
+
+`GET /api/catalogue` returns a paginated envelope:
+
+```json
+{
+  "models": [],
+  "total": 1234,
+  "page": 1,
+  "page_size": 25,
+  "total_pages": 50,
+  "has_prev": false,
+  "has_next": true,
+  "system_profile": { "ram_gb": 32.0, "gpu_vram_gb": 8.0 }
+}
+```
+
+Query parameters:
+
+| Param | Purpose |
+|-------|---------|
+| `page`, `page_size` | Classic pagination (omit both for full list, backward compatible) |
+| `q` | Free-text or field-prefixed search (`repo:`, `publisher:`, `tag:`, `capability:`, `source:`, `fit:`) |
+| `sort_by`, `sort_dir` | Sort by `alias`, `display_name`, `downloads`, `likes`, `last_modified`, `publisher`, `fit` |
+| `installed`, `downloadable` | Boolean filters |
+| `capability`, `publisher`, `source`, `fit` | Field filters |
+| `live`, `refresh` | HF index inclusion and forced refresh |
+| `trusted_only`, `min_downloads`, `min_likes`, `quality` | Quality knobs |
+
+Example: search for a specific model across the HF index:
+
+```bash
+curl 'http://127.0.0.1:8000/api/catalogue?q=ggml-org/gemma-4&live=true&page=1&page_size=25'
+```
+
+By default (`HF_INDEX_MODE=live_page`), each catalogue page is fetched **directly
+from the Hugging Face API** when you navigate (no full local index). Page 1 may
+take longer because the bridge walks HF cursors until it fills the page. Set
+`HF_INDEX_MODE=memory` to restore the older full in-memory index behavior.
+
+**Important:** Hugging Face rate-limits unauthenticated API access. Set
+`ARCHGPU_BRIDGE_HF_TOKEN` to a [Hugging Face access token](https://huggingface.co/settings/tokens)
+with read access before using live discovery at scale.
 
 ## Upgrading Open WebUI (Docker)
 

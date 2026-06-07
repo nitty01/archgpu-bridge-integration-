@@ -1,14 +1,23 @@
 from datetime import UTC, datetime
+import logging
 import os
 import re
-import time
 from typing import Any
 
-import httpx
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..catalogue import CatalogueEntry
+from ..hf_index import (
+    fetch_hf_gguf_index,
+    fetch_hf_live_slice,
+    model_matches_query,
+    paginate_models,
+    resolve_hf_search_query,
+    sort_models,
+)
 from ..pulls import derive_model_id
 from ..services import AppServices
 from ..streaming import sse_to_ollama_chat, sse_to_ollama_generate
@@ -17,6 +26,7 @@ from ..streaming import sse_to_ollama_chat, sse_to_ollama_generate
 def build_ollama_router(services: AppServices) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["ollama"])
     live_catalogue_cache: dict[str, Any] = {"fetched_at": 0.0, "models": []}
+    hf_live_sessions: dict[str, dict[str, Any]] = {}
 
     def _model_payload(
         name: str,
@@ -249,129 +259,18 @@ def build_ollama_router(services: AppServices) -> APIRouter:
     async def _discover_live_catalogue(
         *,
         force_refresh: bool = False,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         settings = services.settings
-        if settings is None or not settings.hf_discovery_enabled:
-            return []
-
-        now = time.time()
-        ttl = max(0, settings.hf_discovery_ttl_seconds)
-        cached_models = live_catalogue_cache.get("models", [])
-        cached_at = float(live_catalogue_cache.get("fetched_at", 0.0))
-        if (
-            not force_refresh
-            and cached_models
-            and ttl > 0
-            and (now - cached_at) < ttl
-        ):
-            return list(cached_models)
-
-        base_url = settings.hf_base_url.rstrip("/")
-        owners = {owner.lower() for owner in settings.hf_discovery_owners}
-        per_query_limit = max(1, settings.hf_discovery_per_query_limit)
-        max_models = max(1, settings.hf_discovery_max_models)
-
-        discovered_ids: list[str] = []
-        seen_ids: set[str] = set()
-        timeout = httpx.Timeout(20.0)
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            for query in settings.hf_discovery_queries:
-                response = await client.get(
-                    f"{base_url}/api/models",
-                    params={
-                        "search": query,
-                        "limit": per_query_limit,
-                        "sort": "lastModified",
-                        "direction": -1,
-                    },
-                )
-                response.raise_for_status()
-                items = response.json()
-                for item in items:
-                    model_id = item.get("id")
-                    if not model_id or model_id in seen_ids:
-                        continue
-                    owner = model_id.split("/", 1)[0].lower() if "/" in model_id else ""
-                    if owners and owner not in owners:
-                        continue
-                    seen_ids.add(model_id)
-                    discovered_ids.append(model_id)
-                    if len(discovered_ids) >= max_models:
-                        break
-                if len(discovered_ids) >= max_models:
-                    break
-
-            results: list[dict[str, Any]] = []
-            for model_id in discovered_ids:
-                details_response = await client.get(f"{base_url}/api/models/{model_id}")
-                if details_response.status_code != 200:
-                    continue
-                details = details_response.json()
-                siblings = details.get("siblings", [])
-                gguf_files = [
-                    f.get("rfilename", "")
-                    for f in siblings
-                    if f.get("rfilename", "").lower().endswith(".gguf")
-                ]
-                filename = _pick_preferred_gguf_filename([f for f in gguf_files if f])
-                if filename is None:
-                    continue
-
-                hf_tags = details.get("tags", [])
-                context_length = None
-                for tag in hf_tags:
-                    match = re.match(r"ctx:(\d+)", str(tag), re.IGNORECASE)
-                    if match:
-                        context_length = int(match.group(1))
-                        break
-
-                pull_name = f"{model_id}:{filename}"
-                installed_as: str | None = None
-                if services.registry.has(pull_name):
-                    installed_as = pull_name
-                elif services.catalogue is not None:
-                    try:
-                        derived = derive_model_id(services.catalogue.resolve(pull_name))
-                        if services.registry.has(derived):
-                            installed_as = derived
-                    except Exception:
-                        installed_as = None
-
-                caps = _derive_live_capabilities(model_id, [str(t) for t in hf_tags], context_length)
-                results.append(
-                    {
-                        "alias": pull_name,
-                        "pull_name": pull_name,
-                        "display_name": model_id.split("/", 1)[-1],
-                        "repo": model_id,
-                        "filename": filename,
-                        "context_length": context_length,
-                        "tags": ["live", "auto"] + [str(t) for t in hf_tags[:8]],
-                        "capabilities": caps,
-                        "installed": installed_as is not None,
-                        "installed_as": installed_as,
-                        "deletable": bool(installed_as and services.registry.is_dynamic(installed_as)),
-                        "downloadable": installed_as is None,
-                        "pull_status": None,
-                        "metadata": {
-                            "source": "live_discovery",
-                            "publisher": model_id.split("/", 1)[0] if "/" in model_id else None,
-                            "last_modified": details.get("lastModified"),
-                            "knowledge_last_update": details.get("lastModified"),
-                            "downloads": details.get("downloads"),
-                            "likes": details.get("likes"),
-                            "pipeline_tag": details.get("pipeline_tag"),
-                            "gated": bool(details.get("gated")),
-                            "private": bool(details.get("private")),
-                            "library_name": details.get("library_name"),
-                        },
-                    }
-                )
-
-        live_catalogue_cache["fetched_at"] = now
-        live_catalogue_cache["models"] = results
-        return list(results)
+        if settings is None:
+            return [], {"error": "settings_unavailable", "count": 0}
+        return await fetch_hf_gguf_index(
+            settings=settings,
+            derive_capabilities=_derive_live_capabilities,
+            registry=services.registry,
+            catalogue=services.catalogue,
+            force_refresh=force_refresh,
+            cache=live_catalogue_cache,
+        )
 
     @router.get("/tags")
     async def list_tags() -> dict[str, Any]:
@@ -545,14 +444,45 @@ def build_ollama_router(services: AppServices) -> APIRouter:
             except (TypeError, ValueError):
                 return default
 
-        query = (request.query_params.get("q") or "").strip().lower()
+        def _to_bool(value: str | None, default: bool | None = None) -> bool | None:
+            if value is None:
+                return default
+            return value.lower() in {"1", "true", "yes", "on"}
+
+        query = (request.query_params.get("q") or "").strip()
         include_live = request.query_params.get("live", "true").lower() != "false"
         force_refresh = request.query_params.get("refresh", "false").lower() == "true"
         trusted_only = request.query_params.get("trusted_only", "false").lower() == "true"
         min_downloads = _to_int(request.query_params.get("min_downloads"), 0)
         min_likes = _to_int(request.query_params.get("min_likes"), 0)
         quality_mode = request.query_params.get("quality", "off").strip().lower()
+        page_param = request.query_params.get("page")
+        page_size_param = request.query_params.get("page_size")
+        page = _to_int(page_param, 0) if page_param is not None else None
+        page_size = _to_int(page_size_param, 0) if page_size_param is not None else None
+        if page is not None and page < 1:
+            page = 1
+        if page_size is not None and page_size < 1:
+            page_size = services.settings.catalogue_default_page_size if services.settings else 25
+        sort_by = (request.query_params.get("sort_by") or "alias").strip().lower()
+        sort_dir = (request.query_params.get("sort_dir") or "asc").strip().lower()
+        installed_filter = _to_bool(request.query_params.get("installed"))
+        downloadable_filter = _to_bool(request.query_params.get("downloadable"))
+        capability_filter = (request.query_params.get("capability") or "").strip().lower()
+        publisher_filter = (request.query_params.get("publisher") or "").strip().lower()
+        source_filter = (request.query_params.get("source") or "").strip().lower()
+        fit_filter = (request.query_params.get("fit") or "").strip().lower()
         system_profile = _detect_system_profile()
+
+        settings = services.settings
+        use_live_page = (
+            include_live
+            and settings is not None
+            and getattr(settings, "hf_index_mode", "live_page") == "live_page"
+            and (page_param is not None or page_size_param is not None)
+        )
+        effective_page = max(1, page or 1)
+        effective_page_size = max(1, min(page_size or (settings.catalogue_default_page_size if settings else 25), 200))
 
         entries = list(_catalogue_lookup().values())
         status_map: dict[str, dict[str, Any]] = {}
@@ -560,6 +490,92 @@ def build_ollama_router(services: AppServices) -> APIRouter:
             status_map = {
                 item.model: item.to_dict() for item in services.pull_manager.list_status()
             }
+
+        def _attach_runtime_fit(items: list[dict[str, Any]]) -> None:
+            for model in items:
+                model["runtime_fit"] = _runtime_fit_for_model(
+                    model_name=str(model.get("display_name") or model.get("alias") or ""),
+                    filename=str(model.get("filename") or ""),
+                    context_length=model.get("context_length"),
+                    system_profile=system_profile,
+                )
+
+        def _apply_catalogue_filters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            filtered = list(items)
+            trusted_publishers = _trusted_publishers()
+            if trusted_only:
+                filtered = [
+                    model
+                    for model in filtered
+                    if str((model.get("metadata") or {}).get("publisher", "")).lower()
+                    in trusted_publishers
+                ]
+            if min_downloads > 0:
+                filtered = [
+                    model
+                    for model in filtered
+                    if int((model.get("metadata") or {}).get("downloads") or 0) >= min_downloads
+                ]
+            if min_likes > 0:
+                filtered = [
+                    model
+                    for model in filtered
+                    if int((model.get("metadata") or {}).get("likes") or 0) >= min_likes
+                ]
+            if quality_mode == "strict":
+                filtered = [
+                    model
+                    for model in filtered
+                    if (
+                        str((model.get("metadata") or {}).get("publisher", "")).lower()
+                        in trusted_publishers
+                        and int((model.get("metadata") or {}).get("downloads") or 0) >= 1000
+                        and int((model.get("metadata") or {}).get("likes") or 0) >= 10
+                    )
+                ]
+            if installed_filter is not None:
+                filtered = [
+                    model for model in filtered if bool(model.get("installed")) is installed_filter
+                ]
+            if downloadable_filter is not None:
+                filtered = [
+                    model
+                    for model in filtered
+                    if bool(model.get("downloadable")) is downloadable_filter
+                ]
+            if capability_filter:
+                filtered = [
+                    model
+                    for model in filtered
+                    if any(
+                        capability_filter in str(cap).lower()
+                        for cap in model.get("capabilities", [])
+                    )
+                ]
+            if publisher_filter:
+                filtered = [
+                    model
+                    for model in filtered
+                    if publisher_filter
+                    in str((model.get("metadata") or {}).get("publisher", "")).lower()
+                ]
+            if source_filter:
+                filtered = [
+                    model
+                    for model in filtered
+                    if source_filter
+                    in str((model.get("metadata") or {}).get("source", "")).lower()
+                ]
+            if fit_filter:
+                filtered = [
+                    model
+                    for model in filtered
+                    if fit_filter
+                    in str((model.get("runtime_fit") or {}).get("recommendation", "")).lower()
+                ]
+            if query:
+                filtered = [model for model in filtered if model_matches_query(model, query)]
+            return filtered
 
         models: list[dict[str, Any]] = []
         for entry in entries:
@@ -613,21 +629,6 @@ def build_ollama_router(services: AppServices) -> APIRouter:
                 }
             )
 
-        if include_live:
-            try:
-                live_models = await _discover_live_catalogue(force_refresh=force_refresh)
-            except Exception:
-                live_models = []
-            for lm in live_models:
-                alias = lm.get("alias")
-                if any(m.get("alias") == alias for m in models):
-                    continue
-                pull_state = status_map.get(alias)
-                if pull_state is None and lm.get("installed_as"):
-                    pull_state = status_map.get(lm["installed_as"])
-                lm["pull_status"] = pull_state or lm.get("pull_status")
-                models.append(lm)
-
         # Always include installed registry models even if they are not part of
         # curated catalogue aliases or live-discovered candidates.
         known_installed = {
@@ -669,69 +670,195 @@ def build_ollama_router(services: AppServices) -> APIRouter:
                 }
             )
 
-        for model in models:
-            model["runtime_fit"] = _runtime_fit_for_model(
-                model_name=str(model.get("display_name") or model.get("alias") or ""),
-                filename=str(model.get("filename") or ""),
-                context_length=model.get("context_length"),
-                system_profile=system_profile,
+        _attach_runtime_fit(models)
+        local_models = _apply_catalogue_filters(models)
+
+        allowed_sort_fields = {
+            "alias",
+            "display_name",
+            "downloads",
+            "likes",
+            "last_modified",
+            "publisher",
+            "fit",
+        }
+        if sort_by not in allowed_sort_fields:
+            sort_by = "alias"
+        if sort_dir not in {"asc", "desc"}:
+            sort_dir = "asc"
+
+        live_index_meta: dict[str, Any] = {"enabled": include_live, "mode": "live_page" if use_live_page else "memory"}
+
+        if use_live_page:
+            local_count = len(local_models)
+            global_start = (effective_page - 1) * effective_page_size
+            global_end = effective_page * effective_page_size
+            page_models: list[dict[str, Any]] = []
+            local_only = (
+                installed_filter is True
+                or source_filter in {"static_catalogue", "local_registry", "local"}
             )
 
-        trusted_publishers = _trusted_publishers()
-        if trusted_only:
-            models = [
-                model
-                for model in models
-                if str((model.get("metadata") or {}).get("publisher", "")).lower()
-                in trusted_publishers
-            ]
-
-        if min_downloads > 0:
-            models = [
-                model
-                for model in models
-                if int((model.get("metadata") or {}).get("downloads") or 0) >= min_downloads
-            ]
-
-        if min_likes > 0:
-            models = [
-                model
-                for model in models
-                if int((model.get("metadata") or {}).get("likes") or 0) >= min_likes
-            ]
-
-        if quality_mode == "strict":
-            models = [
-                model
-                for model in models
-                if (
-                    str((model.get("metadata") or {}).get("publisher", "")).lower() in trusted_publishers
-                    and int((model.get("metadata") or {}).get("downloads") or 0) >= 1000
-                    and int((model.get("metadata") or {}).get("likes") or 0) >= 10
+            if local_only:
+                page_models = sort_models(
+                    local_models[global_start:global_end],
+                    sort_by,
+                    sort_dir,
                 )
-            ]
+                return {
+                    "models": page_models,
+                    "total": local_count,
+                    "local_count": local_count,
+                    "page": effective_page,
+                    "page_size": effective_page_size,
+                    "total_pages": (local_count + effective_page_size - 1) // effective_page_size
+                    if local_count
+                    else 0,
+                    "has_prev": effective_page > 1,
+                    "has_next": global_end < local_count,
+                    "system_profile": system_profile,
+                    "live_index": {"enabled": include_live, "mode": "live_page", "scope": "local_only"},
+                }
 
-        if query:
-            models = [
-                model
-                for model in models
-                if query
-                in " ".join(
-                    [
-                        str(model.get("alias", "")),
-                        str(model.get("display_name", "")),
-                        str(model.get("repo", "")),
-                        str(model.get("filename", "")),
-                        " ".join(str(t) for t in model.get("tags", [])),
-                        " ".join(str(c) for c in model.get("capabilities", [])),
-                        str((model.get("metadata") or {}).get("publisher", "")),
-                        str((model.get("runtime_fit") or {}).get("recommendation", "")),
-                        str((model.get("runtime_fit") or {}).get("reason", "")),
+            hf_offset = (effective_page - 1) * effective_page_size
+            has_more_hf = False
+            if downloadable_filter is not False:
+                hf_search = resolve_hf_search_query(query)
+                hf_models, has_more_hf, live_index_meta = await fetch_hf_live_slice(
+                    settings=settings,
+                    offset=hf_offset,
+                    limit=effective_page_size,
+                    search=hf_search,
+                    sort_by=sort_by,
+                    sort_dir=sort_dir,
+                    derive_capabilities=_derive_live_capabilities,
+                    registry=services.registry,
+                    catalogue=services.catalogue,
+                    sessions=hf_live_sessions,
+                    force_refresh=force_refresh,
+                )
+                for lm in hf_models:
+                    alias = lm.get("alias")
+                    pull_state = status_map.get(alias)
+                    if pull_state is None and lm.get("installed_as"):
+                        pull_state = status_map.get(lm["installed_as"])
+                    lm["pull_status"] = pull_state or lm.get("pull_status")
+                _attach_runtime_fit(hf_models)
+                hf_models = _apply_catalogue_filters(hf_models)
+                page_models = hf_models
+
+                if not page_models and live_index_meta.get("error"):
+                    cached_models, cache_meta = await _discover_live_catalogue(
+                        force_refresh=False
+                    )
+                    hf_cached = [
+                        model
+                        for model in cached_models
+                        if (model.get("metadata") or {}).get("source") == "live_discovery"
                     ]
-                ).lower()
-            ]
+                    for lm in hf_cached:
+                        alias = lm.get("alias")
+                        pull_state = status_map.get(alias)
+                        if pull_state is None and lm.get("installed_as"):
+                            pull_state = status_map.get(lm["installed_as"])
+                        lm["pull_status"] = pull_state or lm.get("pull_status")
+                    _attach_runtime_fit(hf_cached)
+                    hf_cached = _apply_catalogue_filters(hf_cached)
+                    hf_cached = sort_models(hf_cached, sort_by, sort_dir)
+                    paginated = paginate_models(
+                        hf_cached,
+                        page=effective_page,
+                        page_size=effective_page_size,
+                    )
+                    page_models = paginated["models"]
+                    has_more_hf = paginated["has_next"]
+                    live_index_meta = {
+                        **live_index_meta,
+                        **cache_meta,
+                        "mode": "live_page_fallback",
+                        "fallback": "cached_hf_index",
+                        "stale": True,
+                        "hf_live_error": live_index_meta.get("error"),
+                    }
+            else:
+                page_models = []
+                live_index_meta = {
+                    "enabled": include_live,
+                    "mode": "live_page",
+                    "scope": "hf_disabled_by_filter",
+                }
 
-        return {"models": models, "system_profile": system_profile}
+            page_models = sort_models(page_models, sort_by, sort_dir)
+            live_index_meta["enabled"] = include_live
+
+            if live_index_meta.get("fallback") == "cached_hf_index":
+                hf_cached_total = int(live_index_meta.get("count") or 0)
+                total_pages = (
+                    (hf_cached_total + effective_page_size - 1) // effective_page_size
+                    if hf_cached_total
+                    else 0
+                )
+                return {
+                    "models": page_models,
+                    "total": hf_cached_total,
+                    "local_count": local_count,
+                    "page": effective_page,
+                    "page_size": effective_page_size,
+                    "total_pages": total_pages,
+                    "has_prev": effective_page > 1,
+                    "has_next": has_more_hf,
+                    "system_profile": system_profile,
+                    "live_index": live_index_meta,
+                }
+
+            return {
+                "models": page_models,
+                "total": None,
+                "local_count": local_count,
+                "page": effective_page,
+                "page_size": effective_page_size,
+                "total_pages": None,
+                "has_prev": effective_page > 1,
+                "has_next": has_more_hf,
+                "system_profile": system_profile,
+                "live_index": live_index_meta,
+            }
+
+        if include_live:
+            try:
+                live_models, live_index_meta = await _discover_live_catalogue(
+                    force_refresh=force_refresh
+                )
+            except Exception as exc:
+                logger.exception("live catalogue discovery failed")
+                live_models = []
+                live_index_meta = {"enabled": True, "mode": "memory", "count": 0, "error": str(exc)}
+            for lm in live_models:
+                alias = lm.get("alias")
+                if any(m.get("alias") == alias for m in models):
+                    continue
+                pull_state = status_map.get(alias)
+                if pull_state is None and lm.get("installed_as"):
+                    pull_state = status_map.get(lm["installed_as"])
+                lm["pull_status"] = pull_state or lm.get("pull_status")
+                models.append(lm)
+
+        _attach_runtime_fit(models)
+        models = _apply_catalogue_filters(models)
+        models = sort_models(models, sort_by, sort_dir)
+
+        paginated = paginate_models(models, page=page, page_size=page_size)
+        return {
+            "models": paginated["models"],
+            "total": paginated["total"],
+            "page": paginated["page"],
+            "page_size": paginated["page_size"],
+            "total_pages": paginated["total_pages"],
+            "has_prev": paginated["has_prev"],
+            "has_next": paginated["has_next"],
+            "system_profile": system_profile,
+            "live_index": live_index_meta,
+        }
 
     @router.get("/catalogue/ui")
     async def catalogue_ui() -> HTMLResponse:

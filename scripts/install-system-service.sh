@@ -155,8 +155,32 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
 
+HF_CACHE_PATH="${STATE_DIR}/hf_gguf_index.json"
+REPO_HF_CACHE="${ROOT}/data/hf_gguf_index.json"
+if [[ -f "$REPO_HF_CACHE" ]]; then
+  log "Seeding HF index cache from ${REPO_HF_CACHE}"
+  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0644 "$REPO_HF_CACHE" "$HF_CACHE_PATH"
+elif [[ ! -f "$HF_CACHE_PATH" ]]; then
+  log "No HF index cache found; live catalogue will rely on HF API until cache is built"
+fi
+
+EXISTING_HF_TOKEN=""
+if [[ -f "$ENV_FILE" ]]; then
+  EXISTING_HF_TOKEN="$(grep -E '^ARCHGPU_BRIDGE_HF_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+fi
+if [[ -z "$EXISTING_HF_TOKEN" ]]; then
+  INVOKING_USER="${SUDO_USER:-$USER}"
+  if [[ -n "$INVOKING_USER" && "$INVOKING_USER" != "root" ]]; then
+    USER_ENV_FILE="$(getent passwd "$INVOKING_USER" | cut -d: -f6)/.config/archgpu-bridge/environment"
+    if [[ -f "$USER_ENV_FILE" ]]; then
+      EXISTING_HF_TOKEN="$(grep -E '^ARCHGPU_BRIDGE_HF_TOKEN=' "$USER_ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+    fi
+  fi
+fi
+
 log "Writing service environment file"
-cat > "$ENV_FILE" <<EOF
+{
+  cat <<EOF
 ARCHGPU_BRIDGE_LOG_LEVEL=INFO
 ARCHGPU_BRIDGE_HOST=0.0.0.0
 ARCHGPU_BRIDGE_PORT=${SERVICE_PORT}
@@ -166,7 +190,14 @@ ARCHGPU_BRIDGE_DYNAMIC_MODELS_PATH=${STATE_DIR}/downloaded_models.yaml
 ARCHGPU_BRIDGE_BACKEND_MODELS_HOST_DIR=${MODELS_DIR}
 ARCHGPU_BRIDGE_BACKEND_IMAGE=${BACKEND_IMAGE}
 ARCHGPU_BRIDGE_BACKEND_STARTUP_TIMEOUT_SECONDS=300
+ARCHGPU_BRIDGE_HF_DISCOVERY_ENABLED=true
+ARCHGPU_BRIDGE_HF_INDEX_MODE=live_page
+ARCHGPU_BRIDGE_HF_INDEX_CACHE_PATH=${HF_CACHE_PATH}
 EOF
+  if [[ -n "$EXISTING_HF_TOKEN" ]]; then
+    printf 'ARCHGPU_BRIDGE_HF_TOKEN=%s\n' "$EXISTING_HF_TOKEN"
+  fi
+} > "$ENV_FILE"
 
 log "Writing systemd unit ${SYSTEMD_FILE}"
 cat > "$SYSTEMD_FILE" <<EOF

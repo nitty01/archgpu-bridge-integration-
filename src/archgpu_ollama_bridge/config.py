@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     dynamic_port_range: tuple[int, int] = Field(default=(18000, 18099))
     dynamic_default_context_length: int = Field(default=8192, gt=0)
     hf_base_url: str = Field(default="https://huggingface.co")
+    hf_token: str | None = Field(default=None)
     hf_allow_orgs: list[str] = Field(default_factory=list)
     hf_discovery_enabled: bool = Field(default=True)
     hf_discovery_ttl_seconds: int = Field(default=1800, ge=0)
@@ -57,9 +58,20 @@ class Settings(BaseSettings):
             "Mistral Small Instruct GGUF",
             "Phi-4 GGUF",
             "Llama Instruct GGUF",
+            "Gemma GGUF",
         ]
     )
     hf_discovery_owners: list[str] = Field(default_factory=list)
+    hf_index_max_models: int = Field(default=5000, ge=1, le=50000)
+    hf_index_max_pages: int = Field(default=200, ge=1, le=1000)
+    hf_index_page_size: int = Field(default=500, ge=1, le=1000)
+    hf_index_ttl_seconds: int = Field(default=3600, ge=0)
+    hf_index_timeout_seconds: float = Field(default=120.0, gt=0)
+    hf_index_detail_concurrency: int = Field(default=16, ge=1, le=64)
+    hf_index_cache_path: Path | None = Field(default=None)
+    hf_index_mode: str = Field(default="live_page")
+    hf_live_list_page_size: int = Field(default=100, ge=10, le=1000)
+    catalogue_default_page_size: int = Field(default=25, ge=1, le=200)
     pull_max_bytes: int | None = Field(default=None)
     pull_request_timeout_seconds: float = Field(default=3600.0)
 
